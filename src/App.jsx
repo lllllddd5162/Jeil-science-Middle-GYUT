@@ -487,6 +487,9 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [studentCodeInput, setStudentCodeInput] = useState('');
   const [loginError, setLoginError] = useState(false);
+  const [autoLoginChecked, setAutoLoginChecked] = useState(() => {
+    return localStorage.getItem(`${appId}_autoLogin`) === 'true';
+  });
 
   // Core Data
   const [students, setStudents] = useState([]);
@@ -642,11 +645,27 @@ export default function App() {
     };
   }, [students, assignments, memoItems, submissions, memoSubmissions, tests, testScores]);
 
+  // localStorage 자동 로그인 복원
+  useEffect(() => {
+    const savedRole = localStorage.getItem(`${appId}_role`);
+    const savedStudentId = localStorage.getItem(`${appId}_studentId`);
+    if (savedRole) {
+      setUserRole(savedRole);
+      setMyStudentId(savedStudentId || null);
+      setIsLoggedIn(true);
+    }
+  }, []);
+
   // --- Handlers ---
-  const handleLogin = (role, sId = null) => {
+  const handleLogin = (role, sId = null, saveAuto = false) => {
     setUserRole(role);
     setMyStudentId(sId);
     setIsLoggedIn(true);
+    if (saveAuto) {
+      localStorage.setItem(`${appId}_autoLogin`, 'true');
+      localStorage.setItem(`${appId}_role`, role);
+      localStorage.setItem(`${appId}_studentId`, sId || '');
+    }
   };
 
   const handleLogout = () => {
@@ -654,6 +673,10 @@ export default function App() {
     setUserRole(null);
     setMyStudentId(null);
     setActiveTab('matrix');
+    localStorage.removeItem(`${appId}_autoLogin`);
+    localStorage.removeItem(`${appId}_role`);
+    localStorage.removeItem(`${appId}_studentId`);
+    setAutoLoginChecked(false);
   };
 
   // URL 파라미터로 자동 로그인 + 탭 이동 (실장/선생님용)
@@ -699,10 +722,10 @@ export default function App() {
     const passwords = { master: '71207179', teacher: '26350' };
     if (showPasswordInput === 'student') {
       const found = students.find(s => s.studentCode && s.studentCode.trim() === studentCodeInput.trim());
-      if (found) { handleLogin('student', found.id); setShowPasswordInput(null); }
+      if (found) { handleLogin('student', found.id, autoLoginChecked); setShowPasswordInput(null); }
       else { setLoginError(true); }
     } else if (passwordInput === passwords[showPasswordInput]) {
-      handleLogin(showPasswordInput);
+      handleLogin(showPasswordInput, null, autoLoginChecked);
       setShowPasswordInput(null);
     } else {
       setLoginError(true);
@@ -1156,6 +1179,18 @@ export default function App() {
                   onKeyDown={(e) => e.key === 'Enter' && handleAuthSubmit()}
                   className={`w-full p-4 bg-slate-50 rounded-2xl border-2 text-center text-xl font-black tracking-widest outline-none transition-all ${loginError ? 'border-red-500 bg-red-50 animate-shake' : 'border-transparent focus:border-indigo-500'}`}
                 />
+                {/* 자동 로그인 체크박스 */}
+                <label className="flex items-center justify-center gap-2 cursor-pointer select-none">
+                  <div onClick={() => {
+                    const next = !autoLoginChecked;
+                    setAutoLoginChecked(next);
+                    localStorage.setItem(`${appId}_autoLogin`, next ? 'true' : 'false');
+                  }}
+                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${autoLoginChecked ? 'border-indigo-500 bg-indigo-500' : 'border-slate-300 bg-white'}`}>
+                    {autoLoginChecked && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </div>
+                  <span className="text-xs font-bold text-slate-400">로그인 유지 (자동 로그인)</span>
+                </label>
                 <div className="grid grid-cols-2 gap-3 pt-2">
                   <button onClick={() => setShowPasswordInput(null)} className="py-4 bg-slate-100 text-slate-400 rounded-2xl font-black transition">취소</button>
                   <button onClick={handleAuthSubmit} className="py-4 text-white rounded-2xl font-black shadow-lg" style={{background: showPasswordInput === 'student' ? '#059669' : siteColor}}>입장</button>
