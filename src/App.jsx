@@ -645,6 +645,7 @@ export default function App() {
     };
   }, [students, assignments, memoItems, submissions, memoSubmissions, tests, testScores]);
 
+  // --- Handlers ---
   // localStorage 자동 로그인 복원
   useEffect(() => {
     const savedRole = localStorage.getItem(`${appId}_role`);
@@ -656,7 +657,6 @@ export default function App() {
     }
   }, []);
 
-  // --- Handlers ---
   const handleLogin = (role, sId = null, saveAuto = false) => {
     setUserRole(role);
     setMyStudentId(sId);
@@ -1179,7 +1179,6 @@ export default function App() {
                   onKeyDown={(e) => e.key === 'Enter' && handleAuthSubmit()}
                   className={`w-full p-4 bg-slate-50 rounded-2xl border-2 text-center text-xl font-black tracking-widest outline-none transition-all ${loginError ? 'border-red-500 bg-red-50 animate-shake' : 'border-transparent focus:border-indigo-500'}`}
                 />
-                {/* 자동 로그인 체크박스 */}
                 <label className="flex items-center justify-center gap-2 cursor-pointer select-none">
                   <div onClick={() => {
                     const next = !autoLoginChecked;
