@@ -664,7 +664,7 @@ export default function App() {
     const urlTab = params.get('tab');
     if (!urlCode) return;
     const { master: mp, teacher: tp } = (() => {
-      return { master: 'MS104', teacher: '26350' };
+      return { master: '71207179', teacher: '26350' };
     })();
     if (urlCode === mp) { handleLogin('master'); }
     else if (urlCode === tp) { handleLogin('teacher'); }
@@ -696,7 +696,7 @@ export default function App() {
   };
 
   const handleAuthSubmit = () => {
-    const passwords = { master: 'MS104', teacher: '26350' };
+    const passwords = { master: '71207179', teacher: '26350' };
     if (showPasswordInput === 'student') {
       const found = students.find(s => s.studentCode && s.studentCode.trim() === studentCodeInput.trim());
       if (found) { handleLogin('student', found.id); setShowPasswordInput(null); }
