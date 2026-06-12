@@ -151,7 +151,7 @@ function useWindowSize() {
 // --- Helper Functions ---
 const calculateRoundProgress = (students, items, submissionData, statusOrder, labels) => {
   return students.reduce((acc, s) => {
-    const rel = items.filter(a => isItemTarget(a, s));
+    const rel = items.filter(a => a.type === 'all' || (a.targetStudents && a.targetStudents.includes(s.id)));
     const initialCount = rel.length;
     if (initialCount === 0) { acc[s.id] = { label: "미부여", percent: "0.0" }; return acc; }
 
@@ -214,14 +214,6 @@ const calculateRoundProgress = (students, items, submissionData, statusOrder, la
 // 원본 코드에서 호출은 하지만 정의가 없어 런타임 에러 발생하던 함수
 const getTargetStudentNamesLocal = (students, ids) =>
   students.filter(s => ids?.includes(s.id)).map(s => s.name).join(', ') || '없음';
-
-// --- 항목 대상 판정 공용 함수 ---
-// type: 'all' (전체) | 'school' (반별, targetClassIds 사용) | 'individual' (개별, targetStudents 사용)
-const isItemTarget = (item, s) => {
-  if (item.type === 'all') return true;
-  if (item.type === 'school') return !!(item.targetClassIds && s.middleClassId && item.targetClassIds.includes(s.middleClassId));
-  return !!(item.targetStudents && item.targetStudents.includes(s.id));
-};
 
 // --- Shared UI Components ---
 const BufferedInput = ({ value, onSave, placeholder, className, type = "text", disabled = false }) => {
@@ -495,6 +487,9 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [studentCodeInput, setStudentCodeInput] = useState('');
   const [loginError, setLoginError] = useState(false);
+  const [autoLoginChecked, setAutoLoginChecked] = useState(() => {
+    return localStorage.getItem(`${appId}_autoLogin`) === 'true';
+  });
 
   // Core Data
   const [students, setStudents] = useState([]);
@@ -548,7 +543,6 @@ export default function App() {
   const [matrixSchoolFilter, setMatrixSchoolFilter] = useState('all');
   const [matrixGroupFilter, setMatrixGroupFilter] = useState('all');
   const [confirmDelete, setConfirmDelete] = useState(null); // { coll, id, label }
-  const [selectedItemIds, setSelectedItemIds] = useState([]);
   // 드래그 순서 조정
   const [dragState, setDragState] = useState({ type: null, fromId: null, overId: null });
   const [testSectionCollapsed, setTestSectionCollapsed] = useState({ main: false, mini: false });
@@ -577,7 +571,7 @@ export default function App() {
   const [editItemId, setEditItemId] = useState(null);
   const [editItemData, setEditItemData] = useState(null);
 
-  const [newAssignment, setNewAssignment] = useState({ title: '', subject: '물리', level: '기본', type: 'all', targetStudents: [], targetClassIds: [], deadline: '' });
+  const [newAssignment, setNewAssignment] = useState({ title: '', subject: '물리', level: '기본', type: 'all', targetStudents: [], deadline: '' });
   const [selectedReportTests, setSelectedReportTests] = useState({}); // 레포트 시험 선택
   const [newTest, setNewTest] = useState({ 
     title: '', source: '', difficulty: '중', description: '', 
@@ -603,7 +597,7 @@ export default function App() {
     // 상태 필터 적용 (과제 기준)
     if (matrixStatusFilter === 'incomplete') {
       filtered = filtered.filter(s => {
-        const rel = assignments.filter(a => isItemTarget(a, s));
+        const rel = assignments.filter(a => a.type === 'all' || a.targetStudents?.includes(s.id));
         return rel.some(a => {
           const st = submissions[`${s.id}-${a.id}`]?.status || 'not_started';
           return ['not_started','in_progress','incomplete_red'].includes(st);
@@ -611,7 +605,7 @@ export default function App() {
       });
     } else if (matrixStatusFilter === 'completed') {
       filtered = filtered.filter(s => {
-        const rel = assignments.filter(a => isItemTarget(a, s));
+        const rel = assignments.filter(a => a.type === 'all' || a.targetStudents?.includes(s.id));
         if (rel.length === 0) return false;
         return rel.every(a => {
           const st = submissions[`${s.id}-${a.id}`]?.status || 'not_started';
@@ -652,10 +646,26 @@ export default function App() {
   }, [students, assignments, memoItems, submissions, memoSubmissions, tests, testScores]);
 
   // --- Handlers ---
-  const handleLogin = (role, sId = null) => {
+  // localStorage 자동 로그인 복원
+  useEffect(() => {
+    const savedRole = localStorage.getItem(`${appId}_role`);
+    const savedStudentId = localStorage.getItem(`${appId}_studentId`);
+    if (savedRole) {
+      setUserRole(savedRole);
+      setMyStudentId(savedStudentId || null);
+      setIsLoggedIn(true);
+    }
+  }, []);
+
+  const handleLogin = (role, sId = null, saveAuto = false) => {
     setUserRole(role);
     setMyStudentId(sId);
     setIsLoggedIn(true);
+    if (saveAuto) {
+      localStorage.setItem(`${appId}_autoLogin`, 'true');
+      localStorage.setItem(`${appId}_role`, role);
+      localStorage.setItem(`${appId}_studentId`, sId || '');
+    }
   };
 
   const handleLogout = () => {
@@ -663,6 +673,10 @@ export default function App() {
     setUserRole(null);
     setMyStudentId(null);
     setActiveTab('matrix');
+    localStorage.removeItem(`${appId}_autoLogin`);
+    localStorage.removeItem(`${appId}_role`);
+    localStorage.removeItem(`${appId}_studentId`);
+    setAutoLoginChecked(false);
   };
 
   // URL 파라미터로 자동 로그인 + 탭 이동 (실장/선생님용)
@@ -708,10 +722,10 @@ export default function App() {
     const passwords = { master: '71207179', teacher: '26350' };
     if (showPasswordInput === 'student') {
       const found = students.find(s => s.studentCode && s.studentCode.trim() === studentCodeInput.trim());
-      if (found) { handleLogin('student', found.id); setShowPasswordInput(null); }
+      if (found) { handleLogin('student', found.id, autoLoginChecked); setShowPasswordInput(null); }
       else { setLoginError(true); }
     } else if (passwordInput === passwords[showPasswordInput]) {
-      handleLogin(showPasswordInput);
+      handleLogin(showPasswordInput, null, autoLoginChecked);
       setShowPasswordInput(null);
     } else {
       setLoginError(true);
@@ -749,7 +763,7 @@ export default function App() {
     rangedAssign.forEach(a => {
       lines.push(`\n• ${a.subject} / ${a.level} — ${a.title}${a.deadline ? ` (마감: ${a.deadline})` : ''}`);
       students.forEach(s => {
-        if (!(isItemTarget(a, s))) return;
+        if (!(a.type === 'all' || (a.targetStudents && a.targetStudents.includes(s.id)))) return;
         const sub = submissions[`${s.id}-${a.id}`] || {};
         const status = ASSIGN_STATUS_CONFIG[sub.status || 'not_started']?.label || '-';
         lines.push(`  ${s.name}: ${status}${sub.completionDate ? ` (완료일: ${sub.completionDate})` : ''}`);
@@ -763,7 +777,7 @@ export default function App() {
     rangedMemo.forEach(m => {
       lines.push(`\n• ${m.subject} / ${m.level} — ${m.title}`);
       students.forEach(s => {
-        if (!(isItemTarget(m, s))) return;
+        if (!(m.type === 'all' || (m.targetStudents && m.targetStudents.includes(s.id)))) return;
         const sub = memoSubmissions[`${s.id}-${m.id}`] || {};
         const status = MEMO_STATUS_CONFIG[sub.status || 'not_started']?.label || '-';
         lines.push(`  ${s.name}: ${status}`);
@@ -904,7 +918,7 @@ export default function App() {
       });
     } else {
       students.forEach(s => {
-        if (isItemTarget(item, s)) {
+        if (item.type === 'all' || (item.targetStudents && item.targetStudents.includes(s.id))) {
           batch.set(doc(db, 'artifacts', appId, 'public', 'data', coll, `${s.id}-${item.id}`), { status: nextStatus, completionDate: actualDate }, { merge: true });
         }
       });
@@ -953,14 +967,6 @@ export default function App() {
   const deleteItem = async (coll, id) => {
     if (userRole !== 'master') return;
     await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', coll, id));
-  };
-
-  const deleteItemsBatch = async (coll, ids) => {
-    if (userRole !== 'master' || !ids.length) return;
-    const batch = writeBatch(db);
-    ids.forEach(id => batch.delete(doc(db, 'artifacts', appId, 'public', 'data', coll, id)));
-    await batch.commit();
-    setSelectedItemIds([]);
   };
 
   const moveItem = async (direction, item) => {
@@ -1173,6 +1179,17 @@ export default function App() {
                   onKeyDown={(e) => e.key === 'Enter' && handleAuthSubmit()}
                   className={`w-full p-4 bg-slate-50 rounded-2xl border-2 text-center text-xl font-black tracking-widest outline-none transition-all ${loginError ? 'border-red-500 bg-red-50 animate-shake' : 'border-transparent focus:border-indigo-500'}`}
                 />
+                <label className="flex items-center justify-center gap-2 cursor-pointer select-none">
+                  <div onClick={() => {
+                    const next = !autoLoginChecked;
+                    setAutoLoginChecked(next);
+                    localStorage.setItem(`${appId}_autoLogin`, next ? 'true' : 'false');
+                  }}
+                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${autoLoginChecked ? 'border-indigo-500 bg-indigo-500' : 'border-slate-300 bg-white'}`}>
+                    {autoLoginChecked && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </div>
+                  <span className="text-xs font-bold text-slate-400">로그인 유지 (자동 로그인)</span>
+                </label>
                 <div className="grid grid-cols-2 gap-3 pt-2">
                   <button onClick={() => setShowPasswordInput(null)} className="py-4 bg-slate-100 text-slate-400 rounded-2xl font-black transition">취소</button>
                   <button onClick={handleAuthSubmit} className="py-4 text-white rounded-2xl font-black shadow-lg" style={{background: showPasswordInput === 'student' ? '#059669' : siteColor}}>입장</button>
@@ -1464,13 +1481,7 @@ export default function App() {
                     const thisWeekKeyM = getWeekKeyM(todayKst);
 
                     // matrix 탭만 주차 그룹핑
-                    const allItemsM = (activeTab === 'matrix' ? assignments : memoItems).filter(as => {
-                      if (userRole === 'student' && myStudentId) {
-                        const me = students.find(st => st.id === myStudentId);
-                        if (me && !isItemTarget(as, me)) return false;
-                      }
-                      return true;
-                    });
+                    const allItemsM = activeTab === 'matrix' ? assignments : memoItems;
                     const weekGroupsM = activeTab === 'matrix' ? (() => {
                       const wm = {};
                       allItemsM.forEach(as => { const wk = getWeekKeyM(as.deadline); if (!wm[wk]) wm[wk] = []; wm[wk].push(as); });
@@ -1550,7 +1561,7 @@ export default function App() {
                               const incompleteCnt = collapsed ? items.reduce((cnt, as) =>
                                 cnt + visibleStudentsFiltered.filter(s => {
                                   const st = submissions[`${s.id}-${as.id}`]?.status || 'not_started';
-                                  return (isItemTarget(as, s)) && st === 'incomplete_red';
+                                  return (as.type === 'all' || as.targetStudents?.includes(s.id)) && st === 'incomplete_red';
                                 }).length, 0) : 0;
                               return (
                                 <button key={wk}
@@ -1575,7 +1586,7 @@ export default function App() {
                             // 진척도 계산 (전체 과제 기준)
                             let pctText, labelText;
                             if (activeTab === 'matrix') {
-                              const rel = assignments.filter(a => isItemTarget(a, s));
+                              const rel = assignments.filter(a => a.type === 'all' || a.targetStudents?.includes(s.id));
                               const done = rel.filter(a => submissions[`${s.id}-${a.id}`]?.status === 'completed').length;
                               const incomplete = rel.filter(a => submissions[`${s.id}-${a.id}`]?.status === 'incomplete_red').length;
                               const effective = done + incomplete;
@@ -1611,7 +1622,7 @@ export default function App() {
                                       <p className={`text-[10px] font-black ${activeTab === 'matrix' ? 'text-indigo-400' : 'text-purple-400'}`}>{labelText}</p>
                                     </div>
                                     {userRole === 'master' && (
-                                      <button onClick={() => { setBulkSelectedDate(new Date().toISOString().split('T')[0]); setBulkSelectedStatus(null); setBulkDatePopup({ item: { id: `bulk-student-${s.id}`, title: `${s.name} 전체 과제`, isBulkStudent: true, studentId: s.id, items: visibleItemsM.filter(a => isItemTarget(a, s)) }, category: activeTab === 'matrix' ? 'assignment' : 'memorization' }); }}
+                                      <button onClick={() => { setBulkSelectedDate(new Date().toISOString().split('T')[0]); setBulkSelectedStatus(null); setBulkDatePopup({ item: { id: `bulk-student-${s.id}`, title: `${s.name} 전체 과제`, isBulkStudent: true, studentId: s.id, items: visibleItemsM.filter(a => a.type === 'all' || a.targetStudents?.includes(s.id)) }, category: activeTab === 'matrix' ? 'assignment' : 'memorization' }); }}
                                         className="p-2 bg-indigo-50 rounded-xl text-indigo-500 hover:bg-indigo-100 transition-colors">
                                         <ListChecks size={16}/>
                                       </button>
@@ -1629,7 +1640,7 @@ export default function App() {
                                 >
                                 <div className={items.length >= 10 ? "grid grid-cols-2 gap-2 pb-1" : "space-y-2 pb-1"}>
                                   {items.map(as => {
-                                    const isTarget = isItemTarget(as, s);
+                                    const isTarget = as.type === 'all' || (as.targetStudents && as.targetStudents.includes(s.id));
                                     const subKey = `${s.id}-${as.id}`;
                                     const sub = (activeTab === 'matrix' ? submissions : memoSubmissions)[subKey];
                                     const status = sub?.status || 'not_started';
@@ -1704,18 +1715,12 @@ export default function App() {
                 /* ── 데스크탑: 기존 테이블 뷰 ── */
                 <div className="overflow-x-auto text-slate-700">
                   {(() => {
-                    const allItems = (activeTab === 'matrix' ? assignments : memoItems).filter(as => {
-                      if (userRole === 'student' && myStudentId) {
-                        const me = students.find(st => st.id === myStudentId);
-                        if (me && !isItemTarget(as, me)) return false;
-                      }
-                      return true;
-                    });
+                    const allItems = activeTab === 'matrix' ? assignments : memoItems;
                     // 필터 적용
                     const filteredItems = allItems.filter(as => {
                       if (matrixHideDone) {
                         // 모든 대상 학생이 완료했으면 숨김
-                        const targets = visibleStudentsFiltered.filter(s => isItemTarget(as, s));
+                        const targets = visibleStudentsFiltered.filter(s => as.type === 'all' || as.targetStudents?.includes(s.id));
                         const allDone = targets.length > 0 && targets.every(s => {
                           const st = (activeTab === 'matrix' ? submissions : memoSubmissions)[`${s.id}-${as.id}`]?.status;
                           return st === 'completed' || st === 'exempt' || st === 'round_4';
@@ -1786,7 +1791,7 @@ export default function App() {
                             const incompleteCnt = collapsed ? items.reduce((cnt, as) =>
                               cnt + visibleStudentsFiltered.filter(s => {
                                 const st = submissions[`${s.id}-${as.id}`]?.status || 'not_started';
-                                return (isItemTarget(as, s)) && st === 'incomplete_red';
+                                return (as.type === 'all' || as.targetStudents?.includes(s.id)) && st === 'incomplete_red';
                               }).length, 0) : 0;
                             return (
                               <button key={wk}
@@ -1845,7 +1850,7 @@ export default function App() {
                                         const overDays = Math.abs(diff);
                                         const incompleteCnt = visibleStudentsFiltered.filter(s => {
                                           const st = submissions[`${s.id}-${as.id}`]?.status || 'not_started';
-                                          const isTarget = isItemTarget(as, s);
+                                          const isTarget = as.type === 'all' || as.targetStudents?.includes(s.id);
                                           return isTarget && ['not_started','in_progress','incomplete_red'].includes(st);
                                         }).length;
                                         if (incompleteCnt === 0) return null;
@@ -1896,7 +1901,7 @@ export default function App() {
                                   const isMatrix = activeTab === 'matrix';
                                   const items = isMatrix ? assignments : memoItems;
                                   const subData = isMatrix ? submissions : memoSubmissions;
-                                  const rel = items.filter(a => isItemTarget(a, s));
+                                  const rel = items.filter(a => a.type === 'all' || (a.targetStudents?.includes(s.id)));
                                   if (isMatrix) {
                                     // 과제: 완료+미완료만 분모, 나머지 제외
                                     const done = rel.filter(a => subData[`${s.id}-${a.id}`]?.status === 'completed').length;
@@ -1936,7 +1941,7 @@ export default function App() {
                                       const subKey = `${s.id}-${as.id}`;
                                       const sub = (activeTab === 'matrix' ? submissions : memoSubmissions)[subKey];
                                       const status = sub?.status || 'not_started';
-                                      if (!(isItemTarget(as, s))) return <td key={as.id} className="p-1 bg-slate-50/30 text-center font-bold text-[9px] text-slate-300 border-l border-slate-100">-</td>;
+                                      if (!(as.type === 'all' || (as.targetStudents && as.targetStudents.includes(s.id)))) return <td key={as.id} className="p-1 bg-slate-50/30 text-center font-bold text-[9px] text-slate-300 border-l border-slate-100">-</td>;
                                       const cfg = activeTab === 'matrix' ? ASSIGN_STATUS_CONFIG[status] : MEMO_STATUS_CONFIG[status];
                                       const isLate = status === 'completed' && as.deadline && sub.completionDate > as.deadline;
                                       const today = new Date().toISOString().split('T')[0];
@@ -3808,13 +3813,13 @@ export default function App() {
 
                 // 학생별 요약 데이터
                 const studentSummary = students.map(s => {
-                  const relAssign = rangedAssign.filter(a => isItemTarget(a, s));
+                  const relAssign = rangedAssign.filter(a => a.type === 'all' || (a.targetStudents?.includes(s.id)));
                   const doneA = relAssign.filter(a => submissions[`${s.id}-${a.id}`]?.status === 'completed').length;
                   const incompleteA = relAssign.filter(a => submissions[`${s.id}-${a.id}`]?.status === 'incomplete_red').length;
                   const effectiveA = doneA + incompleteA; // 과제현황표 동일: 완료+미완료만 분모
                   const assignPct = effectiveA > 0 ? Math.round(doneA / effectiveA * 100) : null;
 
-                  const relMemo = memoItems.filter(m => isItemTarget(m, s));
+                  const relMemo = memoItems.filter(m => m.type === 'all' || (m.targetStudents?.includes(s.id)));
                   const topMemo = relMemo.reduce((best, m) => {
                     const st = memoSubmissions[`${s.id}-${m.id}`]?.status || 'not_started';
                     const idx = MEMO_STATUS_ORDER.indexOf(st);
@@ -3837,7 +3842,7 @@ export default function App() {
 
                 // 과제별 완료율
                 const assignStats = rangedAssign.map(a => {
-                  const rel = students.filter(s => isItemTarget(a, s));
+                  const rel = students.filter(s => a.type === 'all' || (a.targetStudents?.includes(s.id)));
                   const exempt = rel.filter(s => submissions[`${s.id}-${a.id}`]?.status === 'exempt').length;
                   const effective = rel.length - exempt;
                   const done = rel.filter(s => submissions[`${s.id}-${a.id}`]?.status === 'completed').length;
@@ -4059,7 +4064,7 @@ export default function App() {
                                                 <tr key={s.id} className={idx%2===0?'bg-white':'bg-slate-50/30'}>
                                                   <td className="px-4 py-2.5 font-black text-slate-800 sticky left-0 bg-white">{s.name}</td>
                                                   {dayDeadlineAssigns.map(a => {
-                                                    const isTarget = isItemTarget(a, s);
+                                                    const isTarget = a.type === 'all' || a.targetStudents?.includes(s.id);
                                                     if (!isTarget) return <td key={a.id} className="px-3 py-2.5 text-center"><span className="text-slate-200 text-[10px] font-bold">-</span></td>;
                                                     const sub = submissions[`${s.id}-${a.id}`] || {};
                                                     const status = sub.status || 'not_started';
@@ -4894,8 +4899,8 @@ export default function App() {
                   <div className="flex justify-between items-center mb-8 text-left leading-none">
                     <h2 className="text-xl font-bold text-slate-800 leading-none">신규 항목 발행</h2>
                     <div className="flex bg-slate-100 p-1 rounded-xl leading-none">
-                      <button onClick={() => { setRegCategory('assignment'); setSelectedItemIds([]); }} className={`px-4 py-2 rounded-lg text-xs font-bold transition leading-none ${regCategory === 'assignment' ? 'bg-white text-indigo-800 shadow-sm font-black' : 'text-slate-400'}`}>과제(숙제)</button>
-                      <button onClick={() => { setRegCategory('memorization'); setSelectedItemIds([]); }} className={`px-4 py-2 rounded-lg text-xs font-bold transition leading-none ${regCategory === 'memorization' ? 'bg-white text-purple-800 shadow-sm font-black' : 'text-slate-400'}`}>암기(테스트)</button>
+                      <button onClick={() => setRegCategory('assignment')} className={`px-4 py-2 rounded-lg text-xs font-bold transition leading-none ${regCategory === 'assignment' ? 'bg-white text-indigo-800 shadow-sm font-black' : 'text-slate-400'}`}>과제(숙제)</button>
+                      <button onClick={() => setRegCategory('memorization')} className={`px-4 py-2 rounded-lg text-xs font-bold transition leading-none ${regCategory === 'memorization' ? 'bg-white text-purple-800 shadow-sm font-black' : 'text-slate-400'}`}>암기(테스트)</button>
                     </div>
                   </div>
                   <div className="space-y-8 text-left text-slate-700">
@@ -4905,39 +4910,9 @@ export default function App() {
                       <div className="text-left leading-none">
                         <p className="text-[10px] font-black text-slate-400 mb-3 uppercase flex items-center gap-1 text-left leading-none"><UserCheck size={12} /> 3. 대상</p>
                         <div className="flex gap-2 mb-3 leading-none">
-                          <button onClick={() => setNewAssignment({ ...newAssignment, type: 'all', targetStudents: [], targetClassIds: [] })} className={`flex-1 py-2 rounded-xl text-xs font-bold border-2 leading-none ${newAssignment.type === 'all' ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm' : 'bg-white border-slate-100 text-slate-400'}`}>전체</button>
-                          <button onClick={() => setNewAssignment({ ...newAssignment, type: 'school', targetClassIds: newAssignment.targetClassIds || [] })} className={`flex-1 py-2 rounded-xl text-xs font-black border-2 leading-none ${newAssignment.type === 'school' ? 'bg-violet-600 border-violet-600 text-white shadow-sm' : 'bg-white border-slate-100 text-slate-400'}`}>반별</button>
+                          <button onClick={() => setNewAssignment({ ...newAssignment, type: 'all', targetStudents: [] })} className={`flex-1 py-2 rounded-xl text-xs font-bold border-2 leading-none ${newAssignment.type === 'all' ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm' : 'bg-white border-slate-100 text-slate-400'}`}>전체</button>
                           <button onClick={() => setNewAssignment({ ...newAssignment, type: 'individual' })} className={`flex-1 py-2 rounded-xl text-xs font-black border-2 leading-none ${newAssignment.type === 'individual' ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm' : 'bg-white border-slate-100 text-slate-400'}`}>개별</button>
                         </div>
-                        {newAssignment.type === 'school' && (
-                          <div className="p-3 bg-violet-50 rounded-2xl border border-violet-200 shadow-inner space-y-2">
-                            <p className="text-[10px] font-black text-violet-500 uppercase tracking-widest">대상 반 선택 (반에 추가되는 신입생도 자동 포함)</p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {middleClasses.length === 0 && <p className="text-[11px] text-violet-300 font-bold">등록된 반이 없습니다.</p>}
-                              {['중1','중2','중3'].map(grade => {
-                                const list = middleClasses.filter(c => c.grade === grade);
-                                if (!list.length) return null;
-                                return list.map(mc => {
-                                  const checked = (newAssignment.targetClassIds || []).includes(mc.id);
-                                  return (
-                                    <button key={mc.id} onClick={() => {
-                                      const cur = [...(newAssignment.targetClassIds || [])];
-                                      if (checked) cur.splice(cur.indexOf(mc.id), 1);
-                                      else cur.push(mc.id);
-                                      setNewAssignment({ ...newAssignment, targetClassIds: cur });
-                                    }}
-                                      className={`px-3 py-1.5 rounded-xl text-xs font-black border-2 transition-all leading-none ${checked ? 'bg-violet-500 border-violet-500 text-white shadow-sm' : 'border-violet-200 text-violet-600 bg-white hover:border-violet-400'}`}>
-                                      {grade} · {mc.name}
-                                    </button>
-                                  );
-                                });
-                              })}
-                            </div>
-                            {(newAssignment.targetClassIds || []).length > 0 && (
-                              <p className="text-center text-[10px] font-black text-violet-600">{(newAssignment.targetClassIds || []).length}개 반 선택됨</p>
-                            )}
-                          </div>
-                        )}
                         {newAssignment.type === 'individual' && (() => {
                           const groups = ['A','B','C','D','E'].filter(g => students.some(s => s.group === g));
                           const grades = [...new Set(students.map(s=>s.grade).filter(Boolean))].sort();
@@ -5054,38 +5029,6 @@ export default function App() {
                 </div>
               )}
               <div className="space-y-4">
-                {userRole === 'master' && (() => {
-                  const list = regCategory === 'assignment' ? assignments : memoItems;
-                  const coll = regCategory === 'assignment' ? 'assignments' : 'memoItems';
-                  const allIds = list.map(x => x.id);
-                  const allChecked = allIds.length > 0 && allIds.every(id => selectedItemIds.includes(id));
-                  return (
-                    <div className="flex items-center gap-2 px-1">
-                      <button onClick={() => setSelectedItemIds(allChecked ? [] : allIds)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-black border-2 transition-all ${allChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-400 hover:border-indigo-300'}`}>
-                        <div className={`w-3.5 h-3.5 rounded border-2 flex items-center justify-center ${allChecked ? 'bg-white border-white' : 'border-slate-300'}`}>
-                          {allChecked && <svg width="8" height="6" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="#4f46e5" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                        </div>
-                        전체 선택
-                      </button>
-                      {selectedItemIds.length > 0 && (
-                        <>
-                          <span className="text-[11px] font-black text-indigo-500 bg-indigo-50 px-2.5 py-1.5 rounded-xl border border-indigo-100">{selectedItemIds.length}개 선택됨</span>
-                          <button onClick={() => setConfirmDelete({ coll, ids: [...selectedItemIds], label: `선택한 항목 ${selectedItemIds.length}개`, isBulk: true })}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-black border-2 border-red-200 text-red-500 bg-white hover:bg-red-50 transition-all">
-                            <Trash2 size={13}/> 선택 삭제
-                          </button>
-                        </>
-                      )}
-                      {list.length > 0 && (
-                        <button onClick={() => setConfirmDelete({ coll, ids: allIds, label: `${regCategory === 'assignment' ? '과제' : '암기'} 항목 전체 ${allIds.length}개`, isBulk: true })}
-                          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-black border-2 border-red-200 text-red-400 bg-white hover:bg-red-50 transition-all">
-                          <Trash2 size={13}/> 전체 삭제
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
                 {(regCategory === 'assignment' ? assignments : memoItems).map(a => (
                   <div key={a.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm group transition-all text-left hover:shadow-md">
                     {editItemId === a.id ? (
@@ -5119,16 +5062,10 @@ export default function App() {
                           <p className="text-[10px] uppercase font-black tracking-tighter text-slate-400 flex items-center gap-1"><UserCheck size={11} /> 대상 수정</p>
                           <div className="flex gap-2">
                             <button
-                              onClick={() => setEditItemData({ ...editItemData, type: 'all', targetStudents: [], targetClassIds: [] })}
+                              onClick={() => setEditItemData({ ...editItemData, type: 'all', targetStudents: [] })}
                               className={`px-4 py-1.5 rounded-lg text-xs font-bold border-2 transition-all ${editItemData.type === 'all' ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white border-slate-200 text-slate-400 hover:border-indigo-300'}`}
                             >
                               전체 학생
-                            </button>
-                            <button
-                              onClick={() => setEditItemData({ ...editItemData, type: 'school', targetClassIds: editItemData.targetClassIds || [] })}
-                              className={`px-4 py-1.5 rounded-lg text-xs font-black border-2 transition-all ${editItemData.type === 'school' ? 'bg-violet-600 text-white border-violet-600 shadow-sm' : 'bg-white border-slate-200 text-slate-400 hover:border-violet-300'}`}
-                            >
-                              반별
                             </button>
                             <button
                               onClick={() => setEditItemData({ ...editItemData, type: 'individual', targetStudents: editItemData.targetStudents || [] })}
@@ -5142,28 +5079,6 @@ export default function App() {
                               </span>
                             )}
                           </div>
-                          {editItemData.type === 'school' && (
-                            <div className="mt-2 p-4 bg-violet-50 rounded-2xl border border-violet-200 shadow-inner space-y-2">
-                              <p className="text-[10px] font-black text-violet-500 uppercase tracking-widest">대상 반 선택</p>
-                              <div className="flex flex-wrap gap-1.5">
-                                {middleClasses.length === 0 && <p className="text-[11px] text-violet-300 font-bold">등록된 반이 없습니다.</p>}
-                                {['중1','중2','중3'].map(grade => middleClasses.filter(c => c.grade === grade).map(mc => {
-                                  const checked = (editItemData.targetClassIds || []).includes(mc.id);
-                                  return (
-                                    <button key={mc.id} onClick={() => {
-                                      const cur = [...(editItemData.targetClassIds || [])];
-                                      if (checked) cur.splice(cur.indexOf(mc.id), 1);
-                                      else cur.push(mc.id);
-                                      setEditItemData({ ...editItemData, targetClassIds: cur });
-                                    }}
-                                      className={`px-3 py-1.5 rounded-xl text-xs font-black border-2 transition-all leading-none ${checked ? 'bg-violet-500 border-violet-500 text-white shadow-sm' : 'border-violet-200 text-violet-600 bg-white hover:border-violet-400'}`}>
-                                      {grade} · {mc.name}
-                                    </button>
-                                  );
-                                }))}
-                              </div>
-                            </div>
-                          )}
                           {editItemData.type === 'individual' && (
                             <div className="mt-2 p-4 bg-slate-50 rounded-2xl border border-slate-200 shadow-inner">
                               <div className="flex items-center justify-between mb-3">
@@ -5224,12 +5139,6 @@ export default function App() {
                         onDragEnd={() => { if (dragState.fromId && dragState.overId) reorderList(dragState.type, dragState.fromId, dragState.overId); setDragState({ type: null, fromId: null, overId: null }); }}
                         className={`flex justify-between items-center text-left text-slate-700 shadow-sm p-1 rounded-xl transition-all ${dragState.overId === a.id && dragState.fromId !== a.id ? 'ring-2 ring-indigo-400 bg-indigo-50/50' : ''}`}>
                         {userRole === 'master' && (
-                          <button onClick={() => setSelectedItemIds(p => p.includes(a.id) ? p.filter(id=>id!==a.id) : [...p, a.id])}
-                            className={`shrink-0 w-5 h-5 rounded-lg border-2 flex items-center justify-center mr-1 transition-all ${selectedItemIds.includes(a.id) ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300 bg-white hover:border-indigo-300'}`}>
-                            {selectedItemIds.includes(a.id) && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                          </button>
-                        )}
-                        {userRole === 'master' && (
                           <div className="flex items-center pr-2 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 shrink-0">
                             <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor"><circle cx="4" cy="5" r="1.5"/><circle cx="10" cy="5" r="1.5"/><circle cx="4" cy="10" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="4" cy="15" r="1.5"/><circle cx="10" cy="15" r="1.5"/></svg>
                           </div>
@@ -5250,11 +5159,6 @@ export default function App() {
                                   <div className="w-2 h-2 bg-slate-900 rotate-45 -mt-1 ml-3" />
                                 </div>
                               </div>
-                            )}
-                            {a.type === 'school' && (
-                              <span className="bg-violet-100 text-violet-700 border border-violet-200 px-2 py-0.5 rounded text-[9px] font-black flex items-center gap-1 shadow-sm leading-none">
-                                <School size={10} /> 반별 ({(a.targetClassIds||[]).map(cid => middleClasses.find(mc=>mc.id===cid)?.name).filter(Boolean).join(', ') || '미선택'})
-                              </span>
                             )}
                           </div>
                           <span className="font-black text-slate-800 text-lg leading-tight text-left mt-0.5 leading-none">{a.title}</span>
@@ -5811,7 +5715,7 @@ export default function App() {
                     <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">과제 진척도</p>
                     {(() => {
                       const sid = selectedStudent.id;
-                      const rel = assignments.filter(a => isItemTarget(a, selectedStudent));
+                      const rel = assignments.filter(a => a.type === 'all' || a.targetStudents?.includes(sid));
                       const done = rel.filter(a => submissions[`${sid}-${a.id}`]?.status === 'completed').length;
                       const incomplete = rel.filter(a => submissions[`${sid}-${a.id}`]?.status === 'incomplete_red').length;
                       const effective = done + incomplete;
@@ -6033,14 +5937,14 @@ export default function App() {
               </div>
               <p className="text-lg font-black text-slate-800 mb-1">정말 삭제할까요?</p>
               <p className="text-sm text-slate-500 font-medium mb-6">
-                <span className="font-black text-slate-700">{confirmDelete.label}</span>{confirmDelete.isBulk ? '을 삭제하면' : ' 학생을 삭제하면'}<br/>복구할 수 없습니다.
+                <span className="font-black text-slate-700">{confirmDelete.label}</span> 학생을 삭제하면<br/>복구할 수 없습니다.
               </p>
               <div className="flex gap-3">
                 <button onClick={() => setConfirmDelete(null)}
                   className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-2xl font-black transition-all hover:bg-slate-200">
                   취소
                 </button>
-                <button onClick={async () => { if (confirmDelete.isBulk) { await deleteItemsBatch(confirmDelete.coll, confirmDelete.ids); } else { await deleteItem(confirmDelete.coll, confirmDelete.id); } setConfirmDelete(null); }}
+                <button onClick={async () => { await deleteItem(confirmDelete.coll, confirmDelete.id); setConfirmDelete(null); }}
                   className="flex-1 py-3 bg-red-500 text-white rounded-2xl font-black shadow-lg hover:bg-red-600 transition-all active:scale-95">
                   삭제
                 </button>
